@@ -1,0 +1,1497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Eigenpolygon Explorer</title>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --fs-title: 15px;
+      --fs-body:  14px;
+      --fs-meta:  13px;
+      --fs-small: 12px;
+      --dutch-orange: #F36C21;
+    }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #f8f8f8;
+      color: #222;
+    }
+    #app { display: flex; flex-direction: row; width: 100vw; height: 100vh; }
+
+    /* ===================== LEFT PANEL ===================== */
+    #left-panel {
+      flex: 0 0 30%;
+      border-right: 1px solid #ddd;
+      padding: 14px 14px 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      background: #ffffff;
+      overflow-y: auto;
+      gap: 10px;
+    }
+    .panel-title {
+      font-size: var(--fs-title);
+      font-weight: 700;
+      color: #444;
+      align-self: flex-start;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
+    #left-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 10px;
+      width: 100%;
+    }
+    #left-panel-header .panel-title { align-self: baseline; }
+    #instructions-link {
+      font-size: var(--fs-meta);
+      color: #2b7cff;
+      text-decoration: none;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    #instructions-link:hover { text-decoration: underline; }
+    #left-svg-container { width: 100%; aspect-ratio: 1 / 1; }
+    #left-svg { width: 100%; height: 100%; display: block; }
+
+    .lattice-line   { stroke: #d8d8d8; stroke-width: 0.35; fill: none; }
+    .lattice-axis   { stroke: #c4c4c4; stroke-width: 0.45; fill: none; }
+    .unit-circle    { fill: none; stroke: #555; stroke-width: 0.6; }
+    .snap-tick      { fill: #bdbdbd; pointer-events: none; }
+    .cell-hit       { fill: transparent; stroke: none; }
+    .cell-hit:hover { fill: rgba(0,0,0,0.05); }
+    .polygon-body {
+      fill: var(--dutch-orange); fill-opacity: 0.45;
+      stroke: #d400a0; stroke-width: 1;
+      stroke-linejoin: miter; stroke-linecap: butt; pointer-events: none;
+    }
+    .vertex-marker { stroke: #fff; stroke-width: 0.8; }
+    .vertex-free   { fill: #2b7cff; cursor: grab; }
+    .vertex-free.dragging { cursor: grabbing; opacity: 0.55; }
+    .vertex-label  { font-size: 3.2px; fill: #555; pointer-events: none;
+                     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+    /* Sliders */
+    #controls { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+    .slider-row {
+      display: grid; grid-template-columns: 84px 1fr 32px;
+      align-items: center; gap: 8px; font-size: var(--fs-meta);
+    }
+    .slider-row label { font-weight: 600; }
+    .slider-row input[type="range"] { width: 100%; }
+    .slider-row .value { text-align: right; font-variant-numeric: tabular-nums; color: #666; }
+
+    /* Status + reset row */
+    #bottom-controls {
+      width: 100%; display: flex; align-items: center;
+      justify-content: space-between; gap: 8px;
+    }
+    #status { font-size: var(--fs-small); color: #b00020; flex: 1; min-height: 16px; }
+    #status.ok { color: #2e7d32; }
+    #reset-btn {
+      font-size: var(--fs-meta); padding: 4px 12px;
+      border: 1px solid #ccc; border-radius: 3px;
+      background: #fafafa; cursor: pointer; color: #444; white-space: nowrap;
+    }
+    #reset-btn:hover { background: #f0f0f0; }
+
+    /* ===================== RIGHT PANEL ===================== */
+    #right-panel {
+      flex: 0 0 70%;
+      padding: 14px;
+      background: #ffffff;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    /* Numeric details */
+    #numeric-details { border: 1px solid #eaeaea; border-radius: 4px; }
+    #numeric-details summary {
+      cursor: pointer; padding: 8px 12px;
+      font-size: var(--fs-meta); font-weight: 600; color: #444;
+      list-style: none; display: flex; justify-content: space-between; align-items: center;
+    }
+    #numeric-details summary::-webkit-details-marker { display: none; }
+    #numeric-details summary::after { content: "▸"; font-size: var(--fs-small); color: #888; }
+    #numeric-details[open] summary::after { content: "▾"; }
+    #numeric-details[open] summary { border-bottom: 1px solid #eaeaea; }
+    #numeric-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; font-size: var(--fs-small); overflow-x: auto; }
+    #numeric-body .meta {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: #555; white-space: pre; line-height: 1.6;
+    }
+    #numeric-body .sub-heading {
+      font-size: var(--fs-meta); font-weight: 600; color: #444;
+      margin-top: 8px; margin-bottom: 4px;
+    }
+    #numeric-body .sub-note { font-weight: 400; color: #888; font-size: var(--fs-small); }
+    #numeric-body table { border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--fs-small); }
+    #numeric-body th, #numeric-body td { padding: 3px 7px; text-align: right; border: 1px solid #eee; min-width: 50px; white-space: nowrap; }
+    #numeric-body th { background: #f7f7f7; color: #777; font-weight: 500; }
+    #numeric-body td.zero { color: #bbb; }
+    #numeric-body td.cell-empty   { color: #bbb; }
+    #numeric-body td.cell-full    { color: #222; background: rgba(212,0,160,0.18); font-weight: 600; }
+    #numeric-body td.cell-partial { color: #222; background: rgba(212,0,160,0.08); }
+    #numeric-body td.cell-neg     { color: #222; background: rgba(33,102,172,0.12); }
+    #numeric-body td.sum, #numeric-body th.sum { background: #f0f0f0; font-weight: 600; }
+    #numeric-body .corner { background: #e8e8e8; }
+    #numeric-body td.present { color: #222; background: rgba(212,0,160,0.08); font-weight: 600; }
+    #numeric-body .legend-line { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color: #555; margin-top: 4px; }
+    .check-ok   { color: #2e7d32; font-weight: 600; }
+    .check-fail { color: #b00020; font-weight: 600; }
+
+    /* Colorbar */
+    #colorbar-row {
+      display: flex; align-items: center; gap: 8px;
+      font-size: var(--fs-small); color: #666;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    #colorbar { flex-grow: 1; height: 12px; border: 1px solid #ccc; }
+    #colorbar-row .label { white-space: nowrap; }
+    #colorbar-mode-note { font-size: var(--fs-small); color: #888; font-style: italic; }
+
+    /* Checkbox + drop-down row */
+    #options-row {
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+      gap: 8px 20px; font-size: var(--fs-meta); color: #444; margin-top: 5px;
+    }
+    #options-row label { cursor: pointer; user-select: none; }
+    #basis-cb { cursor: pointer; }
+    #measure-select { font-size: var(--fs-meta); padding: 2px 6px; border: 1px solid #ccc; border-radius: 3px; background: #fafafa; color: #333; }
+
+    /* Component grid */
+    #components-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      grid-template-rows: repeat(2, auto);
+      gap: 10px;
+    }
+    .component-slot {
+      display: flex; flex-direction: column; align-items: center;
+      gap: 3px; padding: 5px;
+      border: 1px solid #eaeaea; border-top-width: 3px;
+      background: #fff; border-radius: 4px;
+    }
+    .component-slot.absent { opacity: 0.38; background: #fafafa; }
+    .component-label {
+      font-size: var(--fs-small); color: #555;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .component-canvas {
+      width: 100%; aspect-ratio: 1 / 1; background: #fff;
+      display: flex; align-items: center; justify-content: center;
+      color: #bbb; font-size: var(--fs-small); font-style: italic; overflow: hidden;
+    }
+    .component-canvas.absent { border: 1px dashed #ddd; }
+    .component-canvas svg { width: 100%; height: 100%; }
+    .component-sigma {
+      font-size: var(--fs-small);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      text-align: center; line-height: 1.3;
+    }
+    .component-sigma .frac { color: #999; font-size: calc(var(--fs-small) - 1px); }
+    .component-sigma.absent { color: #bbb; }
+
+    /* Slot drawing */
+    .slot-lattice   { stroke: #d8d8d8; stroke-width: 0.6px; fill: none; pointer-events: none; vector-effect: non-scaling-stroke; }
+    .slot-circle    { stroke: #888; stroke-width: 0.85px; fill: none; pointer-events: none; vector-effect: non-scaling-stroke; }
+    .slot-cell      { stroke: none; }
+    .slot-dot       { fill: #222; pointer-events: none; }
+    .slot-coef      { fill: #d62728; stroke: #fff; stroke-width: 0.6; pointer-events: none; }
+    .slot-badge     { font-size: 8px; fill: #555; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; pointer-events: none; }
+
+    /* Animated directed line (after temp.html): dashes march along the path direction */
+    .animated-line {
+      fill: none; stroke: #000; stroke-width: 1.2px;  /* twice the lattice-ray width */
+      stroke-linejoin: round; pointer-events: none;
+      vector-effect: non-scaling-stroke;              /* width and dashes stay fixed on screen when zooming */
+      stroke-dasharray: 2px 1.4px;                    /* fine dashes */
+      animation: marchForward 0.6s linear infinite;
+    }
+    @keyframes marchForward {
+      from { stroke-dashoffset: 3.4px; }              /* one dash + gap period */
+      to   { stroke-dashoffset: 0; }
+    }
+
+    /* Coefficient chart (scree-plot design) */
+    #scree-container {
+      border: 1px solid #eaeaea; border-radius: 4px; padding: 10px;
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    #scree-header { display: flex; justify-content: space-between; align-items: center; }
+    #scree-header .title { font-size: var(--fs-meta); font-weight: 600; color: #333; }
+    #scree-toggle-btn {
+      font-size: var(--fs-meta); padding: 4px 12px;
+      border: 1px solid #ccc; border-radius: 3px;
+      background: #fafafa; cursor: pointer; color: #333;
+    }
+    #scree-toggle-btn:hover { background: #f0f0f0; }
+    #scree-svg-container { width: 100%; }
+    .scree-axis path, .scree-axis line { stroke: #bbb; }
+    .scree-axis text { fill: #666; font-size: var(--fs-small); }
+    .scree-axis-label { fill: #666; font-size: var(--fs-meta); font-style: italic; }
+    .scree-gridline { stroke: #efefef; stroke-dasharray: 2,2; }
+    .scree-bar { stroke: none; }
+    .scree-bar.stub { opacity: 0.22; }
+
+    /* Exercises panel */
+    #exercises-details { border: 1px solid #eaeaea; border-radius: 4px; }
+    #exercises-details summary {
+      cursor: pointer; padding: 8px 12px;
+      font-size: var(--fs-meta); font-weight: 600; color: #444;
+      list-style: none; display: flex; justify-content: space-between; align-items: center;
+    }
+    #exercises-details summary::-webkit-details-marker { display: none; }
+    #exercises-details summary::after { content: "▸"; font-size: var(--fs-small); color: #888; }
+    #exercises-details[open] summary::after { content: "▾"; }
+    #exercises-details[open] summary { border-bottom: 1px solid #eaeaea; }
+    #exercises-body { padding: 10px 14px; display: flex; flex-direction: column; gap: 14px; }
+    .exercise { font-size: var(--fs-body); color: #333; line-height: 1.5; }
+    .exercise .ex-number {
+      font-weight: 700; color: #2b7cff; font-size: var(--fs-meta);
+      text-transform: uppercase; letter-spacing: 0.05em;
+    }
+    .exercise .ex-prompt { margin: 2px 0 4px; }
+    .exercise .ex-prompt ol { margin: 4px 0 0; padding-left: 22px; }
+    .exercise .ex-prompt li { margin: 2px 0; }
+    .exercise details.hint summary {
+      cursor: pointer; font-size: var(--fs-meta); color: #888; font-style: italic;
+      list-style: none; display: inline;
+    }
+    .exercise details.hint[open] .hint-body {
+      margin-top: 4px; padding: 6px 10px;
+      background: #f8f8f8; border-left: 2px solid #2b7cff;
+      font-size: var(--fs-meta); color: #555; line-height: 1.5; border-radius: 0 3px 3px 0;
+    }
+
+    /* Export button inside the Numeric details header */
+    #numeric-details summary .summary-right { display: flex; align-items: center; gap: 10px; margin-left: auto; margin-right: 8px; }
+    #export-btn {
+      font-size: var(--fs-meta); padding: 3px 12px; font-weight: 400;
+      border: 1px solid #ccc; border-radius: 3px;
+      background: #fafafa; cursor: pointer; color: #333;
+    }
+    #export-btn:hover { background: #f0f0f0; }
+
+    .placeholder {
+      border: 1px dashed #ddd; border-radius: 4px; padding: 16px;
+      color: #aaa; font-size: var(--fs-meta); font-style: italic;
+    }
+
+    /* Tooltip */
+    #heatmap-tooltip {
+      position: fixed; pointer-events: none;
+      background: rgba(0,0,0,0.8); color: #fff;
+      padding: 5px 9px; border-radius: 3px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: var(--fs-small); display: none; z-index: 1000; white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ==================== LEFT PANEL ==================== -->
+  <div id="left-panel">
+    <div id="left-panel-header">
+      <div class="panel-title">Shape &amp; lattice</div>
+      <a id="instructions-link"
+         href="https://github.com/andreplima/shape-rank-pdn"
+         target="_blank" rel="noopener noreferrer">Instructions ↗</a>
+    </div>
+
+    <div id="left-svg-container">
+      <svg id="left-svg" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <div id="controls">
+      <div class="slider-row">
+        <label for="slider-d">d</label>
+        <input type="range" id="slider-d" min="3" max="10" step="1" value="4">
+        <span class="value" id="value-d">4</span>
+      </div>
+      <div class="slider-row">
+        <label for="slider-nspd">nspd</label>
+        <input type="range" id="slider-nspd" min="1" max="4" step="1" value="2">
+        <span class="value" id="value-nspd">2</span>
+      </div>
+      <div class="slider-row">
+        <label for="slider-na">na</label>
+        <input type="range" id="slider-na" min="1" max="8" step="1" value="4">
+        <span class="value" id="value-na">4</span>
+      </div>
+      <div class="slider-row">
+        <label for="slider-g">granularity</label>
+        <input type="range" id="slider-g" min="2" max="10" step="1" value="4">
+        <span class="value" id="value-g">4</span>
+      </div>
+    </div>
+
+    <div id="bottom-controls">
+      <div id="status">&nbsp;</div>
+      <button id="reset-btn">↺ Reset</button>
+    </div>
+  </div>
+
+  <!-- ==================== RIGHT PANEL ==================== -->
+  <div id="right-panel">
+    <div class="panel-title">Decomposition into eigenpolygons</div>
+    <!-- Colorbar + options -->
+    <div>
+      <div id="colorbar-row">
+        <span class="label" id="colorbar-min">−M</span>
+        <canvas id="colorbar" width="400" height="12"></canvas>
+        <span class="label" id="colorbar-max">+M</span>
+      </div>
+      <div id="colorbar-mode-note"></div>
+      <div id="options-row">
+        <span>
+          <input type="checkbox" id="basis-cb">
+          <label for="basis-cb">Show basis polygons instead of eigenpolygons</label>
+        </span>
+        <span>
+          <label for="measure-select">Alternative sense of measure</label>
+          <select id="measure-select">
+            <option value="signed" selected>Signed measure</option>
+            <option value="unsigned">Unsigned measure</option>
+            <option value="tv">Total-variation measure</option>
+          </select>
+        </span>
+      </div>
+    </div>
+
+    <!-- Eigenpolygon grid (2 × 5) -->
+    <div id="components-grid"></div>
+
+    <!-- Coefficients c_j -->
+    <div id="scree-container">
+      <div id="scree-header">
+        <span class="title">Coefficients — |c<sub>j</sub>| vs j</span>
+        <button id="scree-toggle-btn">Switch to log scale</button>
+      </div>
+      <div id="scree-svg-container"></div>
+    </div>
+
+    <!-- Exercises (placeholders) -->
+    <details id="exercises-details">
+      <summary>Exercises</summary>
+      <div id="exercises-body">
+        <div class="exercise">
+          <div class="ex-number">Exercise 1 — A polygon made of regular polygons</div>
+          <div class="ex-prompt">
+            Set <i>d</i> = 5 and leave every <i>a<sub>k</sub></i> = 1, so that <i>z</i> is the regular pentagon.
+            Look at the coefficient chart: only <i>c</i><sub>1</sub> is nonzero. Now drag <i>z</i><sub>4</sub> inward to
+            <i>a</i><sub>4</sub> = 1/2.
+            <ol>
+              <li>How many eigenpolygons appear? Compare their coefficients |<i>c<sub>j</sub></i>| for <i>j</i> ≠ 1. What do you notice about their sizes?</li>
+              <li>Tick <em>Show basis polygons instead of eigenpolygons</em>. Which <i>F<sub>j</sub></i> are convex, which are stars, and which are degenerate? How are <i>F</i><sub>2</sub> and <i>F</i><sub>3</sub> related?</li>
+              <li>Open Numeric details and find the vertex reconstruction check. What does it confirm?</li>
+              <li>Change <i>d</i> to 6, move one vertex, and look at the basis polygons again. Which ones are traced more than once, and how many times?</li>
+            </ol>
+          </div>
+          <details class="hint">
+            <summary>Show hint</summary>
+            <div class="hint-body">
+              Lowering one vertex by δ changes every coefficient by the same amount in modulus, because
+              <i>c<sub>j</sub></i> = (1/<i>d</i>) Σ<sub><i>k</i></sub> <i>a<sub>k</sub></i> ω<sup><i>k</i>(1−<i>j</i>)</sup>
+              and the term for <i>k</i> = 4 changes by δ ω<sup>4(1−<i>j</i>)</sup>/<i>d</i>. Here δ = 1/2 and <i>d</i> = 5,
+              so <i>c</i><sub>0</sub>, <i>c</i><sub>2</sub>, <i>c</i><sub>3</sub> and <i>c</i><sub>4</sub> all have modulus 0.1,
+              while <i>c</i><sub>1</sub> drops from 1 to 0.9. A local change to the shape is a global change to the spectrum.
+              <br><br>
+              <i>F</i><sub>2</sub> and <i>F</i><sub>3</sub> are the same pentagram traced in opposite directions, because
+              ω<sup>3</sup> is the complex conjugate of ω<sup>2</sup>. For <i>d</i> = 6, <i>F</i><sub>2</sub> and <i>F</i><sub>4</sub>
+              trace a triangle twice, and <i>F</i><sub>3</sub> is a segment traced three times there and back. In general
+              <i>F<sub>j</sub></i> is the regular star polygon {<i>d</i>/<i>j</i>}, traced gcd(<i>j</i>, <i>d</i>) times.
+              <br><br>
+              The reconstruction check confirms that adding the eigenpolygons vertex by vertex gives back <i>z</i> exactly,
+              up to rounding: every polygon is a sum of regular, star or degenerate polygons.
+            </div>
+          </details>
+        </div>
+
+        <div class="exercise">
+          <div class="ex-number">Exercise 2 — Areas add up</div>
+          <div class="ex-prompt">
+            Set <i>d</i> = 4, nspd = 1, na = 2 and granularity = 4, and drag the vertices to
+            <i>a</i> = (1, 1/2, 1, 1/2). The polygon is a rhombus.
+            <ol>
+              <li>Compute the area of the rhombus by hand from its diagonals, and check it against <i>A</i>(<i>z</i>) in Numeric details.</li>
+              <li>Read the table of signed areas <i>A</i>(<i>E<sub>j</sub></i>). Which eigenpolygons contribute? Why is <i>A</i>(<i>E</i><sub>3</sub>) negative? Check each value against <i>A</i>(<i>E<sub>j</sub></i>) = (<i>d</i>/2) |<i>c<sub>j</sub></i>|<sup>2</sup> sin(2π<i>j</i>/<i>d</i>).</li>
+              <li>Check that Σ<sub><i>j</i></sub> <i>A</i>(<i>E<sub>j</sub></i>) = <i>A</i>(<i>z</i>). Then move the vertices to several other configurations, including <i>d</i> = 5, and check the reconstruction error each time.</li>
+              <li>Area is <em>quadratic</em> in the vertices: the area of a sum of two polygons is not, in general, the sum of their areas. Why does the sum work here?</li>
+            </ol>
+          </div>
+          <details class="hint">
+            <summary>Show hint</summary>
+            <div class="hint-body">
+              For the rhombus, <i>c</i><sub>1</sub> = 0.75 and <i>c</i><sub>3</sub> = 0.25, so
+              <i>A</i>(<i>E</i><sub>1</sub>) = 2 · 0.75<sup>2</sup> = 1.125 and <i>A</i>(<i>E</i><sub>3</sub>) = −2 · 0.25<sup>2</sup> = −0.125.
+              Their sum is 1, the area of a rhombus with diagonals 2 and 1. <i>E</i><sub>3</sub> runs clockwise, so its signed
+              area is negative. <i>E</i><sub>0</sub> is a point and <i>E</i><sub>2</sub> is a segment, so neither encloses area.
+              <br><br>
+              The signed area is <i>A</i>(<i>z</i>) = ½ Im Σ<sub><i>k</i></sub> <span style="text-decoration:overline"><i>z<sub>k</sub></i></span> <i>z</i><sub><i>k</i>+1</sub>.
+              Expanding <i>z</i> = Σ<sub><i>j</i></sub> <i>E<sub>j</sub></i> produces cross terms between <i>E<sub>j</sub></i> and <i>E<sub>l</sub></i>,
+              and each of them contains the factor Σ<sub><i>k</i></sub> ω<sup>(<i>l</i>−<i>j</i>)<i>k</i></sup>, which is zero whenever
+              <i>j</i> ≠ <i>l</i>. Only the diagonal terms survive. This is an orthogonality relation, of the same kind as
+              Parseval's identity, and it needs the sum over <em>all</em> vertices to work.
+            </div>
+          </details>
+        </div>
+
+        <div class="exercise">
+          <div class="ex-number">Exercise 3 — Cell areas do not add up</div>
+          <div class="ex-prompt">
+            Set <i>d</i> = 5, nspd = 1, na = 3 and granularity = 4, and drag the vertices to
+            <i>a</i> = (1, 1/2, 3/4, 1/4, 1). Keep the signed measure. Click <em>Export tables</em> and open the spreadsheet.
+            <ol>
+              <li>Add the coverage matrices <i>A</i><sub>1</sub>, …, <i>A</i><sub>4</sub> cell by cell. (<i>E</i><sub>0</sub> is a point, so its table is omitted and its contribution is zero.) Compare the result with the coverage matrix <i>A</i> of <i>z</i>. Look in particular at the cell in sector 4, annulus 1.</li>
+              <li>Compare the <em>row sums</em>, the totals per annulus, of <i>A</i> and of Σ<sub><i>j</i></sub> <i>A<sub>j</sub></i>. Then compare the <em>column sums</em>, the totals per sector.</li>
+              <li>Compare the <em>grand totals</em>. Which of the three comparisons succeeds, and why only that one?</li>
+              <li>The column sums of <i>A</i> are all different, whereas the column sums of Σ<sub><i>j</i></sub> <i>A<sub>j</sub></i> are all equal. Compute ½ sin 72° · <i>a<sub>s</sub></i> <i>a</i><sub><i>s</i>+1</sub> for each sector <i>s</i>. What do the column sums of <i>A</i> measure?</li>
+            </ol>
+          </div>
+          <details class="hint">
+            <summary>Show hint</summary>
+            <div class="hint-body">
+              In the cell at sector 4, annulus 1, <i>z</i> has measure 0.2083, while the eigenpolygons together give only 0.0252.
+              The row sums of <i>A</i> are (0.7368, 0.2910, 0.0718) against (0.9735, 0.1261, 0) for the sum. The column sums
+              of <i>A</i> are (0.2378, 0.1783, 0.0892, 0.1189, 0.4755) against 0.2199 for every sector of the sum. Only the
+              grand totals agree, at 1.0997, which is Exercise 2 again.
+              <br><br>
+              The reason is that a cell measure integrates the winding number, and the winding number of <i>z</i> around a
+              point is <em>not</em> the sum of the winding numbers of the <i>E<sub>j</sub></i>. In the rhombus of Exercise 2,
+              for example, <i>z</i> winds once around the origin, while <i>E</i><sub>1</sub> winds +1 and <i>E</i><sub>3</sub>
+              winds −1, so the eigenpolygons together wind zero times around it. The decomposition moves area from one place
+              to another, and the gains and losses only balance over the whole plane.
+              <br><br>
+              With nspd = 1, the column sum for sector <i>s</i> is the area of the triangle (0, <i>z<sub>s</sub></i>, <i>z</i><sub><i>s</i>+1</sub>),
+              which is ½ sin(2π/<i>d</i>) <i>a<sub>s</sub></i> <i>a</i><sub><i>s</i>+1</sub>. So the sectors of <i>A</i> record the
+              products of adjacent values in the row of <i>X</i>, information that the eigenpolygons spread evenly across all
+              sectors. In the rhombus of Exercise 2 the sector totals happen to agree, but only because of its symmetry; the
+              annulus totals still disagree there.
+            </div>
+          </details>
+        </div>
+
+        <div class="exercise">
+          <div class="ex-number">Exercise 4 — Other senses of measure, and rank</div>
+          <div class="ex-prompt">
+            Keep the configuration of Exercise 3.
+            <ol>
+              <li>Switch to the <em>unsigned measure</em> and repeat the grand-total comparison. Does even the total survive now? Try the <em>total-variation measure</em> as well.</li>
+              <li>Back in the signed measure, look at the coverage matrices <i>A</i><sub>1</sub>, …, <i>A</i><sub>4</sub>. What do you notice about their columns? Read off rank(<i>A<sub>j</sub></i>) below each table.</li>
+              <li>What is the rank of Σ<sub><i>j</i></sub> <i>A<sub>j</sub></i>? Compare it with rank(<i>A</i>), shown below the coverage matrix of <i>z</i>.</li>
+              <li>What does this suggest about where the rank of a feature matrix produced by a polygon template comes from?</li>
+            </ol>
+          </div>
+          <details class="hint">
+            <summary>Show hint</summary>
+            <div class="hint-body">
+              In the unsigned measure the grand totals are 1.0997 for <i>z</i> and 1.2699 for the sum of the eigenpolygons.
+              Signed measure lets the clockwise eigenpolygons cancel part of the counter-clockwise ones; the unsigned and
+              total-variation measures drop orientation, so that cancellation is lost and nothing balances, not even in total.
+              <br><br>
+              Since <i>d</i> = 5 is prime, each <i>E<sub>j</sub></i> with <i>j</i> ≠ 0 looks the same after a rotation by 72°:
+              the rotation only shifts which vertex comes first. With nspd = 1 that rotation maps each sector onto the next,
+              so all columns of <i>A<sub>j</sub></i> are identical and rank(<i>A<sub>j</sub></i>) = 1. Their sum therefore also
+              has identical columns and rank 1. Yet rank(<i>A</i>) = 3.
+              <br><br>
+              The coverage matrix of <i>z</i> owes its rank to the way the eigenpolygons <em>interact</em> on the lattice, not
+              to the eigenpolygons taken one at a time. A spectral explanation of the features in terms of eigenpolygons
+              alone would miss exactly the structure that makes a linear system <i>SW</i> = <i>Y</i> solvable.
+            </div>
+          </details>
+        </div>
+      </div>
+    </details>
+
+    <!-- Numeric details -->
+    <details id="numeric-details">
+      <summary>Numeric details<span class="summary-right"><button id="export-btn" type="button">Export tables</button></span></summary>
+      <div id="numeric-body">
+        <div class="meta" id="numeric-meta"></div>
+        <div id="numeric-matrix-container"></div>
+        <div id="numeric-coef-container"></div>
+        <div id="numeric-area-container"></div>
+        <div id="numeric-eigen-container"></div>
+      </div>
+    </details>
+  </div>
+</div>
+
+<div id="heatmap-tooltip"></div>
+
+<script>
+// =============================================================================
+// Constants and state
+// =============================================================================
+const DEFAULTS = { d: 4, nspd: 2, na: 4, g: 4 };
+const state = {
+  d: DEFAULTS.d, nspd: DEFAULTS.nspd, na: DEFAULTS.na, g: DEFAULTS.g,
+  a: new Array(DEFAULTS.d).fill(1),   // radii a_k, in B* = {1/g, ..., 1}
+};
+
+// =============================================================================
+// Geometry: complex plane <-> SVG coordinates
+// =============================================================================
+const VIEW = 100, C0 = 50, R = 44;        // centre and unit radius in SVG units
+const sx = x => C0 + R * x;
+const sy = y => C0 - R * y;               // y axis points up
+const ux = X => (X - C0) / R;
+const uy = Y => (C0 - Y) / R;
+
+function zeta(k, d){ const t = 2*Math.PI*k/d; return { x: Math.cos(t), y: Math.sin(t) }; }
+function vertices(){ return state.a.map((ak,k)=>{ const u=zeta(k,state.d); return { k, x: ak*u.x, y: ak*u.y }; }); }
+function annulusRadius(m){ return Math.sqrt(m/state.na); }
+
+// Fraction formatting for values in B
+function gcd(a,b){ return b ? gcd(b, a % b) : a; }
+function fracStr(ak){
+  if(Math.abs(ak*state.g - Math.round(ak*state.g)) > 1e-9) return ak.toFixed(3);  // mid-drag
+  const n = Math.round(ak*state.g), g = gcd(n, state.g);
+  return (n/g) === (state.g/g) ? "1" : `${n/g}/${state.g/g}`;
+}
+
+// =============================================================================
+// Left-view SVG layers
+// =============================================================================
+const leftSVG    = d3.select("#left-svg");
+const cellGrp    = leftSVG.append("g");     // invisible hit areas for the tooltip
+const latticeGrp = leftSVG.append("g");
+const tickGrp    = leftSVG.append("g");
+const polygonGrp = leftSVG.append("g");
+const vertexGrp  = leftSVG.append("g");
+const labelGrp   = leftSVG.append("g");
+
+// Annular-sector path for a cell (sector s, annulus m)
+function cellPath(s, m){
+  const S = state.d*state.nspd;
+  const t0 = 2*Math.PI*s/S, t1 = 2*Math.PI*(s+1)/S;
+  const r0 = annulusRadius(m)*R, r1 = annulusRadius(m+1)*R;
+  const p = (r,t) => `${C0 + r*Math.cos(t)},${C0 - r*Math.sin(t)}`;
+  const large = (t1 - t0) > Math.PI ? 1 : 0;
+  // Counter-clockwise in math coordinates = sweep-flag 0 in SVG (y flipped)
+  let d = `M${p(r1,t0)} A${r1},${r1} 0 ${large} 0 ${p(r1,t1)} L${p(r0,t1)}`;
+  if(r0 > 0) d += ` A${r0},${r0} 0 ${large} 1 ${p(r0,t0)}`;
+  else d += ` L${C0},${C0}`;
+  return d + " Z";
+}
+
+function renderLattice(){
+  const S = state.d*state.nspd;
+  latticeGrp.selectAll("*").remove();
+  // Annulus boundaries (inner ones); the unit circle is drawn separately
+  for(let m=1; m<state.na; m++)
+    latticeGrp.append("circle").attr("class","lattice-line")
+      .attr("cx",C0).attr("cy",C0).attr("r",annulusRadius(m)*R);
+  // Sector rays; every nspd-th ray is a natural axis ζ_k
+  for(let s=0; s<S; s++){
+    const t = 2*Math.PI*s/S;
+    latticeGrp.append("line")
+      .attr("class", s % state.nspd === 0 ? "lattice-axis" : "lattice-line")
+      .attr("x1",C0).attr("y1",C0)
+      .attr("x2",sx(Math.cos(t))).attr("y2",sy(Math.sin(t)));
+  }
+  latticeGrp.append("circle").attr("class","unit-circle").attr("cx",C0).attr("cy",C0).attr("r",R);
+
+  // Hit areas for the hover tooltip
+  const cells = [];
+  for(let s=0; s<S; s++) for(let m=0; m<state.na; m++) cells.push({s,m});
+  cellGrp.selectAll("*").remove();
+  cellGrp.selectAll("path").data(cells).enter().append("path")
+    .attr("class","cell-hit").attr("d",c=>cellPath(c.s,c.m))
+    .on("mousemove",(ev,c)=>{
+      const cellA = Math.PI/(state.d*state.nspd*state.na);
+      const v = lastMz ? lastMz[c.m][c.s] : NaN;
+      showTooltip(ev,`cell (s=${c.s}, m=${c.m})<br>measure = ${fmt(v,6)}<br>measure / cell area = ${fmt(v/cellA,4)}`);
+    })
+    .on("mouseleave",hideTooltip);
+
+  // Snap positions B* on each axis ray
+  const ticks = [];
+  for(let k=0; k<state.d; k++){
+    const u = zeta(k,state.d);
+    for(let n=1; n<=state.g; n++) ticks.push({ x: n/state.g*u.x, y: n/state.g*u.y });
+  }
+  tickGrp.selectAll("*").remove();
+  tickGrp.selectAll("circle").data(ticks).enter().append("circle")
+    .attr("class","snap-tick").attr("r",0.55)
+    .attr("cx",t=>sx(t.x)).attr("cy",t=>sy(t.y));
+}
+
+function renderPolygon(){
+  const pts = vertices().map(v=>`${sx(v.x)},${sy(v.y)}`).join(" ");
+  let p = polygonGrp.select("polygon");
+  if(p.empty()) p = polygonGrp.append("polygon").attr("class","polygon-body");
+  p.attr("points", pts);
+}
+
+function renderVertices(){
+  const V = vertices();
+  const sel = vertexGrp.selectAll("circle").data(V, v=>v.k);
+  sel.enter().append("circle").attr("class","vertex-marker vertex-free").attr("r",2.4)
+    .merge(sel).attr("cx",v=>sx(v.x)).attr("cy",v=>sy(v.y));
+  sel.exit().remove();
+  vertexGrp.selectAll("circle").call(dragBehavior);
+
+  // Vertex labels z_k just outside the unit circle
+  const L = V.map(v=>{ const u=zeta(v.k,state.d); return { k:v.k, x:1.1*u.x, y:1.1*u.y }; });
+  const ls = labelGrp.selectAll("text").data(L, l=>l.k);
+  // Label "z" with a subscript index (dy-shifted tspan; works in all browsers)
+  const entered = ls.enter().append("text").attr("class","vertex-label")
+    .attr("text-anchor","middle").attr("dominant-baseline","central");
+  entered.append("tspan").attr("class","base").text("z");
+  entered.append("tspan").attr("class","sub").attr("dy","0.9").attr("font-size","2.3");
+  entered.merge(ls).attr("x",l=>sx(l.x)).attr("y",l=>sy(l.y))
+    .select("tspan.sub").text(l=>l.k);
+  ls.exit().remove();
+}
+
+// =============================================================================
+// Fourier core: c_j, E_j = c_j F_j, signed areas
+// =============================================================================
+const cx  = (re,im) => ({ re, im });
+const cadd = (p,q) => cx(p.re+q.re, p.im+q.im);
+const cmul = (p,q) => cx(p.re*q.re - p.im*q.im, p.re*q.im + p.im*q.re);
+const cabs = p => Math.hypot(p.re, p.im);
+const cexp = t => cx(Math.cos(t), Math.sin(t));      // e^{it}
+
+// Shoelace signed area of a closed polygon given as complex vertices
+function signedArea(P){
+  let s = 0;
+  for(let k=0; k<P.length; k++){ const p=P[k], q=P[(k+1)%P.length]; s += p.re*q.im - q.re*p.im; }
+  return s/2;
+}
+
+function computeFourier(){
+  const d = state.d;
+  const z = state.a.map((ak,k)=>cmul(cx(ak,0), cexp(2*Math.PI*k/d)));
+  const c = [], F = [], E = [];
+  for(let j=0; j<d; j++){
+    let s = cx(0,0);
+    for(let k=0; k<d; k++) s = cadd(s, cmul(z[k], cexp(-2*Math.PI*j*k/d)));
+    c.push(cx(s.re/d, s.im/d));
+    F.push(d3.range(d).map(k=>cexp(2*Math.PI*j*k/d)));
+    E.push(F[j].map(f=>cmul(c[j], f)));
+  }
+  const areaE = E.map(signedArea);
+  const areaZ = signedArea(z);
+
+  // Checks: vertex reconstruction and Parseval
+  let reconV = 0;
+  for(let k=0; k<d; k++){
+    let s = cx(0,0); for(let j=0; j<d; j++) s = cadd(s, E[j][k]);
+    reconV = Math.max(reconV, cabs(cx(s.re - z[k].re, s.im - z[k].im)));
+  }
+  const parsL = c.reduce((t,cj)=>t + cabs(cj)**2, 0);
+  const parsR = state.a.reduce((t,ak)=>t + ak*ak, 0) / d;
+  return { z, c, F, E, areaE, areaZ, reconV, parsL, parsR };
+}
+
+// =============================================================================
+// Exact signed cell measure  μ_C(P) = ∫_C w_P
+//   w_P = Σ_k sgn(T_k) 1_{T_k}  (a.e.), T_k = fan triangle (0, P_k, P_{k+1}).
+//   T_k ∩ wedge is again a fan triangle; its intersection with a disc of
+//   radius r has a closed form, so every term is computed analytically.
+// =============================================================================
+const TWO_PI = 2*Math.PI;
+const mod2pi = t => ((t % TWO_PI) + TWO_PI) % TWO_PI;
+
+// Area of {points at angle φ ∈ [φa, φb], radius ≤ min(ρ(φ), r)},
+// where ρ(φ) = h / cos(φ − φ0) is the polar equation of the triangle's far edge.
+function fanDiscArea(φa, φb, h, φ0, r){
+  if(φb <= φa || r <= 0) return 0;
+  if(h >= r) return 0.5*r*r*(φb - φa);            // edge lies outside the disc
+  const β = Math.acos(h/r);                        // |φ − φ0| ≤ β  ⇔  ρ ≤ r
+  const lo = Math.max(φa, φ0 - β), hi = Math.min(φb, φ0 + β);
+  let A = 0;
+  if(hi > lo){
+    A += 0.5*h*h*(Math.tan(hi - φ0) - Math.tan(lo - φ0));   // part bounded by the edge
+    A += 0.5*r*r*((φb - φa) - (hi - lo));                     // part bounded by the circle
+  } else {
+    A += 0.5*r*r*(φb - φa);
+  }
+  return A;
+}
+
+// Precompute the fan triangles of a closed polygon P (array of complex points)
+function fanTriangles(P){
+  const T = [];
+  for(let k=0; k<P.length; k++){
+    const p = P[k], q = P[(k+1)%P.length];
+    const crossPQ = p.re*q.im - p.im*q.re;
+    if(Math.abs(crossPQ) < 1e-14) continue;        // degenerate (point, digon, through origin)
+    const αp = Math.atan2(p.im, p.re), αq = Math.atan2(q.im, q.re);
+    let span = αq - αp;                               // angle swept from p to q, in (−π, π)
+    if(span >  Math.PI) span -= TWO_PI;
+    if(span < -Math.PI) span += TWO_PI;
+    const sign = span > 0 ? 1 : -1;
+    const start = mod2pi(span > 0 ? αp : αq);         // fan covers [start, start + |span|]
+    // Foot of the perpendicular from 0 onto line pq
+    const dx = q.re - p.re, dy = q.im - p.im, L2 = dx*dx + dy*dy;
+    const t = -(p.re*dx + p.im*dy)/L2;
+    const fx = p.re + t*dx, fy = p.im + t*dy;
+    T.push({ sign, start, end: start + Math.abs(span), h: Math.hypot(fx, fy), φ0: Math.atan2(fy, fx) });
+  }
+  return T;
+}
+
+// Signed measure of polygon P on every cell; returns M[m][s] (annulus m, sector s)
+function signedMeasureMatrix(P){
+  const S = state.d*state.nspd, na = state.na;
+  const T = fanTriangles(P);
+  const M = d3.range(na).map(()=>new Array(S).fill(0));
+  for(const tr of T){
+    for(let s=0; s<S; s++){
+      const t0 = TWO_PI*s/S, t1 = TWO_PI*(s+1)/S;
+      // The fan interval may run past 2π, so test the sector and its copy shifted by 2π
+      for(const off of [0, TWO_PI]){
+        const lo = Math.max(tr.start, t0 + off), hi = Math.min(tr.end, t1 + off);
+        if(hi <= lo) continue;
+        // φ0 must be expressed on the same branch as [lo, hi]
+        const mid = 0.5*(lo + hi);
+        let φ0 = tr.φ0; while(φ0 < mid - Math.PI) φ0 += TWO_PI; while(φ0 > mid + Math.PI) φ0 -= TWO_PI;
+        let prev = 0;
+        for(let m=0; m<na; m++){
+          const cur = fanDiscArea(lo, hi, tr.h, φ0, annulusRadius(m+1));
+          M[m][s] += tr.sign*(cur - prev);
+          prev = cur;
+        }
+      }
+    }
+  }
+  return M;
+}
+
+// =============================================================================
+// General cell measures (signed, unsigned, total-variation), exact.
+//   In polar coordinates, at angle φ the winding number along the ray is a step
+//   function of ρ that drops by sgn(T_k) when ρ crosses the far edge ρ_k(φ) of an
+//   active fan triangle. Between consecutive "breakpoint" angles (sector bounds,
+//   triangle ends, edge/circle crossings, edge/edge crossings) the ordering of
+//   all radii is fixed, so each radial piece integrates in closed form:
+//     ∫ ½ r² dφ   for a circle,      ∫ ½ ρ_k(φ)² dφ = ½ h_k² [tan(φ − φ0_k)]   for an edge.
+// =============================================================================
+function measureMatrix(P, mode){
+  const S = state.d*state.nspd, na = state.na;
+  const radii = d3.range(na+1).map(annulusRadius);
+  const M = d3.range(na).map(()=>new Array(S).fill(0));
+  const f = mode === "signed" ? (w=>w) : mode === "unsigned" ? (w=>w!==0?1:0) : (w=>Math.abs(w));
+
+  // Fan-triangle pieces, split so that every piece lies inside [0, 2π)
+  const pieces = [];
+  for(const tr of fanTriangles(P)){
+    if(tr.end <= TWO_PI) pieces.push({ ...tr, lo: tr.start, hi: tr.end });
+    else { pieces.push({ ...tr, lo: tr.start, hi: TWO_PI }); pieces.push({ ...tr, lo: 0, hi: tr.end - TWO_PI }); }
+  }
+  if(!pieces.length) return M;
+
+  // Relative tolerance for edge/circle comparisons. An edge whose distance h to the
+  // origin is within EPS·r of a circle of radius r is treated as tangent, i.e. as lying
+  // outside that circle on the whole interval (an edge can only touch a circle from outside).
+  const EPS = 1e-12;
+
+  // Breakpoint angles
+  const br = [0, TWO_PI];
+  for(let s=1; s<S; s++) br.push(TWO_PI*s/S);
+  for(const p of pieces){
+    br.push(p.lo, p.hi);
+    // Foot-point angle: ρ_k(φ) is monotonic on each side of it, so a subinterval's
+    // midpoint can never be the point where an edge touches a circle
+    br.push(mod2pi(p.φ0));
+    for(let m=1; m<=na; m++) if(p.h < radii[m]*(1 - EPS)){
+      const β = Math.acos(p.h/radii[m]); br.push(mod2pi(p.φ0 - β), mod2pi(p.φ0 + β));
+    }
+  }
+  const T = fanTriangles(P);
+  for(let k=0; k<T.length; k++) for(let l=k+1; l<T.length; l++){
+    // Lines: x cos φ0 + y sin φ0 = h
+    const a1=Math.cos(T[k].φ0), b1=Math.sin(T[k].φ0), a2=Math.cos(T[l].φ0), b2=Math.sin(T[l].φ0);
+    const det = a1*b2 - a2*b1;
+    if(Math.abs(det) < 1e-14) continue;
+    const x = (T[k].h*b2 - T[l].h*b1)/det, y = (a1*T[l].h - a2*T[k].h)/det;
+    br.push(mod2pi(Math.atan2(y, x)));
+  }
+  br.sort((u,v)=>u-v);
+
+  for(let i=0; i<br.length-1; i++){
+    const a = br[i], b = br[i+1];
+    if(b - a < 1e-13) continue;
+    const mid = 0.5*(a + b);
+    const s = Math.min(S-1, Math.floor(mid/(TWO_PI/S)));
+    // Active edges at this angle, with their radius at mid and a branch-corrected φ0
+    const act = [];
+    let w0 = 0;
+    for(const p of pieces){
+      if(mid < p.lo || mid >= p.hi) continue;
+      let φ0 = p.φ0; while(φ0 < mid - Math.PI) φ0 += TWO_PI; while(φ0 > mid + Math.PI) φ0 -= TWO_PI;
+      act.push({ ρ: p.h/Math.cos(mid - φ0), h: p.h, φ0, sign: p.sign });
+      w0 += p.sign;                        // winding number next to the origin
+    }
+    if(!act.length) continue;
+    act.sort((u,v)=>u.ρ - v.ρ);
+    const Icirc = r => 0.5*r*r*(b - a);
+    const Iedge = e => 0.5*e.h*e.h*(Math.tan(b - e.φ0) - Math.tan(a - e.φ0));
+
+    for(let m=0; m<na; m++){
+      const r0 = radii[m], r1 = radii[m+1];
+      // Winding number just above r0
+      let w = w0, idx = 0;
+      while(idx < act.length && act[idx].ρ < r0*(1 - EPS)){ w -= act[idx].sign; idx++; }
+      let lowerI = Icirc(r0), acc = 0;
+      while(idx < act.length && act[idx].ρ < r1*(1 - EPS)){
+        const upI = Iedge(act[idx]);
+        acc += f(w)*(upI - lowerI);
+        lowerI = upI; w -= act[idx].sign; idx++;
+      }
+      acc += f(w)*(Icirc(r1) - lowerI);
+      M[m][s] += acc;
+    }
+  }
+  return M;
+}
+
+// =============================================================================
+// Numerical rank (one-sided Jacobi SVD)
+// =============================================================================
+function singularValues(A){
+  // Work on the orientation with fewer columns
+  let rows = A.length, cols = A[0].length;
+  let X = A.map(r=>r.slice());
+  if(cols > rows){ X = d3.range(cols).map(c=>d3.range(rows).map(r=>A[r][c])); [rows, cols] = [cols, rows]; }
+  for(let sweep=0; sweep<60; sweep++){
+    let off = 0;
+    for(let p=0; p<cols-1; p++) for(let q=p+1; q<cols; q++){
+      let α=0, β=0, γ=0;
+      for(let i=0; i<rows; i++){ α += X[i][p]**2; β += X[i][q]**2; γ += X[i][p]*X[i][q]; }
+      if(Math.abs(γ) <= 1e-15*Math.sqrt(α*β) || γ === 0) continue;
+      off = Math.max(off, Math.abs(γ)/Math.sqrt(α*β));
+      const ζ = (β - α)/(2*γ), t = Math.sign(ζ || 1)/(Math.abs(ζ) + Math.sqrt(1 + ζ*ζ));
+      const c = 1/Math.sqrt(1 + t*t), s = c*t;
+      for(let i=0; i<rows; i++){ const xp = X[i][p], xq = X[i][q]; X[i][p] = c*xp - s*xq; X[i][q] = s*xp + c*xq; }
+    }
+    if(off < 1e-15) break;
+  }
+  const sv = d3.range(cols).map(c=>Math.sqrt(d3.sum(X, r=>r[c]*r[c])));
+  return sv.sort((u,v)=>v-u);
+}
+function numericalRank(A, tol){
+  const sv = singularValues(A);
+  if(!sv.length || sv[0] === 0) return { rank: 0, sv };
+  return { rank: sv.filter(x => x > tol*sv[0]).length, sv };
+}
+
+// =============================================================================
+// Formatting
+// =============================================================================
+const ZERO = 1e-10;
+function fmt(x,dp){ dp = dp ?? 4; if(Math.abs(x) < ZERO) return "0"; return x.toFixed(dp); }
+function fmtSci(x){ if(Math.abs(x) < 1e-300) return "0"; return x.toExponential(2); }
+function argDeg(p){
+  let t = Math.atan2(p.im, p.re) * 180/Math.PI;
+  if(t <= -180 + 1e-9) t = 180;                 // keep θ in (−180°, 180°]
+  return Math.abs(t) < 1e-9 ? 0 : t;
+}
+function polarStr(p){
+  const r = cabs(p);
+  if(r < ZERO) return "0";
+  return `${r.toFixed(4)} ∠ ${argDeg(p).toFixed(1)}°`;
+}
+function check(ok){ return `<span class="${ok?"check-ok":"check-fail"}">${ok?"PASS":"FAIL"}</span>`; }
+
+// =============================================================================
+// Numeric details
+// =============================================================================
+// Coverage table: rows = annuli (innermost at the bottom), columns = sectors
+function coverageTableHTML(title, note, M){
+  const S = M[0].length, na = M.length, cellA = Math.PI/(S*na), TOL = 1e-9*cellA;
+  const colSums = new Array(S).fill(0), rowSums = new Array(na).fill(0);
+  let total = 0;
+  for(let m=0; m<na; m++) for(let s=0; s<S; s++){ colSums[s]+=M[m][s]; rowSums[m]+=M[m][s]; total+=M[m][s]; }
+  const cls = v => Math.abs(v) <= TOL ? "cell-empty" : v < 0 ? "cell-neg"
+                 : Math.abs(v - cellA) <= TOL ? "cell-full" : "cell-partial";
+  let h = `<div class='sub-heading'>${title} <span class='sub-note'>${note}</span></div>`;
+  h += "<table><tr><th class='corner'>m\\s</th>";
+  for(let s=0; s<S; s++) h += `<th>${s}</th>`;
+  h += "<th class='sum'>Σ</th></tr>";
+  for(let m=na-1; m>=0; m--){
+    h += `<tr><th>${m}</th>`;
+    for(let s=0; s<S; s++) h += `<td class='${cls(M[m][s])}'>${fmt(M[m][s])}</td>`;
+    h += `<td class='sum'>${fmt(rowSums[m])}</td></tr>`;
+  }
+  h += "<tr><th class='sum'>Σ</th>";
+  for(let s=0; s<S; s++) h += `<td class='sum'>${fmt(colSums[s])}</td>`;
+  h += `<td class='sum corner'>${fmt(total)}</td></tr></table>`;
+  return { html: h, total };
+}
+
+function renderNumericDetails(F){
+  const d = state.d, S = d*state.nspd, nCells = S*state.na;
+  const modeName = MODE_NAMES[state.mode];
+  const cov = coverageTableHTML("Coverage matrix A of z",
+    `(${modeName}; rows = annuli m, innermost at the bottom; columns = sectors s)`, lastMz);
+  const rk = numericalRank(lastMz, 1e-9);
+  document.getElementById("numeric-matrix-container").innerHTML =
+    cov.html + `<div class="legend-line">rank(A) = ${rk.rank}</div>`;
+  const covErr = cov.total - F.areaZ;
+  const B = d3.range(0,state.g+1).map(n=>{ if(n===0) return "0"; if(n===state.g) return "1"; const q=gcd(n,state.g); return `${n/q}/${state.g/q}`; });
+  const sumAE = F.areaE.reduce((t,x)=>t+x, 0);
+  const areaErr = F.areaZ - sumAE;
+  const parsErr = Math.abs(F.parsL - F.parsR);
+
+  document.getElementById("numeric-meta").innerHTML = [
+    `d = ${d},  nspd = ${state.nspd},  na = ${state.na},  granularity = ${state.g}`,
+    `B = {${B.join(", ")}},  B* = B \\ {0} = {${B.slice(1).join(", ")}}`,
+    `a = (${state.a.map(fracStr).join(", ")})`,
+    `S = ${S} sectors,  ${nCells} cells,  cell area = π/${nCells} = ${fmt(Math.PI/nCells,6)}`,
+    `total measure of z over all cells = ${fmt(cov.total,6)}  (− A(z) = ${fmtSci(covErr)})  [${check(Math.abs(covErr) < 1e-9)}]`,
+    `A(z) = ${fmt(F.areaZ,6)}`,
+    `vertex reconstruction  max_k |z_k − Σ_j (E_j)_k| = ${fmtSci(F.reconV)}  [${check(F.reconV < 1e-10)}]`,
+    `Parseval  Σ_j |c_j|² = ${fmt(F.parsL,6)},  (1/d) Σ_k a_k² = ${fmt(F.parsR,6)}  [${check(parsErr < 1e-10)}]`,
+    `cell-measure cross-check  max |μ_C (strip method) − μ_C (fan method)| over z, E_j = ${fmtSci(lastCross)}  [${check(lastCross < 1e-10)}]`,
+  ].join("\n");
+
+  // Coefficient table
+  const c1 = cabs(F.c[1]);
+  let h = "<div class='sub-heading'>Coefficients c<sub>j</sub></div><table><tr><th>j</th>";
+  for(let j=0; j<d; j++) h += `<th>${j}</th>`;
+  h += "</tr>";
+  const row = (label, f) => {
+    let r = `<tr><th>${label}</th>`;
+    for(let j=0; j<d; j++){ const v = f(j); r += `<td class="${v.cls}">${v.txt}</td>`; }
+    return r + "</tr>";
+  };
+  const cls = j => cabs(F.c[j]) < ZERO ? "zero" : "present";
+  h += row("|c<sub>j</sub>|",       j=>({ txt: fmt(cabs(F.c[j])), cls: cls(j) }));
+  h += row("arg c<sub>j</sub> (°)", j=>({ txt: cabs(F.c[j]) < ZERO ? "—" : argDeg(F.c[j]).toFixed(1), cls: cls(j) }));
+  h += row("|c<sub>j</sub>|/|c<sub>1</sub>|", j=>({ txt: j===1 ? "—" : fmt(cabs(F.c[j])/c1), cls: j===1 ? "" : cls(j) }));
+  h += "</table>";
+  document.getElementById("numeric-coef-container").innerHTML = h;
+
+  // Total signed areas
+  let a = "<div class='sub-heading'>Total signed area of the eigenpolygons</div><table><tr>";
+  for(let j=0; j<d; j++) a += `<th>A(E<sub>${j}</sub>)</th>`;
+  a += "</tr><tr>";
+  for(let j=0; j<d; j++) a += `<td class="${Math.abs(F.areaE[j])<ZERO?"zero":"present"}">${fmt(F.areaE[j],6)}</td>`;
+  a += "</tr></table>";
+  a += `<div class="legend-line">A(z) − Σ<sub>j</sub> A(E<sub>j</sub>) = ${fmt(F.areaZ,6)} − ${fmt(sumAE,6)} = ${fmtSci(areaErr)}  [${check(Math.abs(areaErr) < 1e-10)}]</div>`;
+  document.getElementById("numeric-area-container").innerHTML = a;
+
+  // Coverage matrices A_j of the eigenpolygons E_j
+  let e = "";
+  const hidden = d3.range(d).filter(j => isDegenerate(j, F));
+  if(hidden.length)
+    e += `<div class="legend-line" style="margin-top:8px;color:#888">Tables omitted for zero-area eigenpolygons: ${hidden.map(j=>`E<sub>${j}</sub>`).join(", ")}</div>`;
+  for(let j=0; j<d; j++){
+    if(isDegenerate(j, F)) continue;
+    const t = coverageTableHTML(`Coverage matrix A<sub>${j}</sub> of E<sub>${j}</sub>`, `(${modeName})`, lastME[j]);
+    e += t.html;
+    const rkj = numericalRank(lastME[j], 1e-9).rank;
+    if(state.mode === "signed"){
+      const err = t.total - F.areaE[j];
+      e += `<div class="legend-line">rank(A<sub>${j}</sub>) = ${rkj},  Σ cells = ${fmt(t.total,6)},  A(E<sub>${j}</sub>) = ${fmt(F.areaE[j],6)}  [${check(Math.abs(err) < 1e-9)}]</div>`;
+    } else {
+      e += `<div class="legend-line">rank(A<sub>${j}</sub>) = ${rkj},  Σ cells = ${fmt(t.total,6)}</div>`;
+    }
+  }
+  document.getElementById("numeric-eigen-container").innerHTML = e;
+}
+
+// Zero-area eigenpolygons: E_0 (point), E_{d/2} (digon), or c_j = 0
+function isDegenerate(j, F){
+  return j === 0 || 2*j === state.d || cabs(F.c[j]) < ZERO;
+}
+
+// =============================================================================
+// Colormap (from shape-rank-svd)
+// =============================================================================
+const GAMMA = 0.5;
+const SLOT_COLORS = d3.schemeTableau10;
+const BLUE=[0x21,0x66,0xac], GRAY=[0xf2,0xf2,0xf2], ORANGE=[0xd6,0x60,0x4d];
+function toHex2(n){ const s=Math.round(Math.max(0,Math.min(255,n))).toString(16); return s.length===1?"0"+s:s; }
+function lerpRGB(a,b,t){ return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+function colormap(t){
+  if(!isFinite(t)) t = 0; t = Math.max(-1, Math.min(1, t));
+  const rgb = t < 0 ? lerpRGB(GRAY,BLUE,-t) : lerpRGB(GRAY,ORANGE,t);
+  return "#"+toHex2(rgb[0])+toHex2(rgb[1])+toHex2(rgb[2]);
+}
+function powerMap(t){ return t === 0 ? 0 : Math.sign(t)*Math.pow(Math.abs(t), GAMMA); }
+
+const colorbarCanvas = document.getElementById("colorbar");
+const colorbarCtx = colorbarCanvas.getContext("2d");
+function drawColorbar(signed){
+  const w = colorbarCanvas.width, h = colorbarCanvas.height;
+  const img = colorbarCtx.createImageData(w, h);
+  for(let x=0; x<w; x++){
+    const t = signed ? -1 + 2*(x/(w-1)) : x/(w-1);
+    const c = colormap(t);
+    const r=parseInt(c.substr(1,2),16), g=parseInt(c.substr(3,2),16), b=parseInt(c.substr(5,2),16);
+    for(let y=0; y<h; y++){ const i=(y*w+x)*4; img.data[i]=r; img.data[i+1]=g; img.data[i+2]=b; img.data[i+3]=255; }
+  }
+  colorbarCtx.putImageData(img, 0, 0);
+}
+function updateColorbar(M){
+  const signed = state.mode === "signed";
+  drawColorbar(signed);
+  document.getElementById("colorbar-min").textContent = signed ? "−"+M.toFixed(3) : "0";
+  document.getElementById("colorbar-max").textContent = "+"+M.toFixed(3);
+  document.getElementById("colorbar-mode-note").textContent =
+    `Shared scale, in units of cell area (${MODE_NAMES[state.mode]}) — power-law mapping (γ = ½). Zero = gray. White = absent.`;
+}
+
+// =============================================================================
+// Eigenpolygon grid
+// =============================================================================
+const MAX_SLOTS = 10;
+const SC0 = 50, SR = 46;                      // slot plot: centre and unit radius
+const tx = p => SC0 + SR*p.re, ty = p => SC0 - SR*p.im;
+let slotRefs = [];
+
+function slotCellPath(s, m){
+  const S = state.d*state.nspd;
+  const t0 = TWO_PI*s/S, t1 = TWO_PI*(s+1)/S;
+  const r0 = annulusRadius(m)*SR, r1 = annulusRadius(m+1)*SR;
+  const p = (r,t) => `${SC0 + r*Math.cos(t)},${SC0 - r*Math.sin(t)}`;
+  const large = (t1 - t0) > Math.PI ? 1 : 0;
+  let d = `M${p(r1,t0)} A${r1},${r1} 0 ${large} 0 ${p(r1,t1)} L${p(r0,t1)}`;
+  d += r0 > 0 ? ` A${r0},${r0} 0 ${large} 1 ${p(r0,t0)}` : ` L${SC0},${SC0}`;
+  return d + " Z";
+}
+
+// Build the slot structure (called when d, nspd, na or the checkbox change)
+function buildGrid(){
+  const grid = document.getElementById("components-grid");
+  grid.innerHTML = "";
+  slotRefs = [];
+  const S = state.d*state.nspd, na = state.na;
+  const NS = "http://www.w3.org/2000/svg";
+  for(let j=0; j<MAX_SLOTS; j++){
+    const present = j < state.d;
+    const slot = document.createElement("div");
+    slot.className = "component-slot" + (present ? "" : " absent");
+    slot.style.borderTopColor = SLOT_COLORS[j % SLOT_COLORS.length];
+
+    const label = document.createElement("div");
+    label.className = "component-label";
+    label.innerHTML = state.basis ? `Basis Polygon F<sub>${j}</sub>` : `Eigenpolygon E<sub>${j}</sub>`;
+    slot.appendChild(label);
+
+    const canvas = document.createElement("div");
+    canvas.className = "component-canvas" + (present ? "" : " absent");
+    const caption = document.createElement("div");
+    caption.className = "component-sigma" + (present ? "" : " absent");
+    const ref = { j, present, caption, label, k: 1 };
+
+    if(present){
+      const svg = d3.select(canvas).append("svg").attr("viewBox","0 0 100 100").attr("preserveAspectRatio","xMidYMid meet");
+      // Everything except the badge lives in a zoomable group, so the slot zooms like its own window
+      const zg = svg.append("g");
+      ref.zg = zg;
+      const cells = [];
+      for(let s=0; s<S; s++) for(let m=0; m<na; m++) cells.push({ s, m });
+      ref.cells = zg.append("g").selectAll("path").data(cells).enter().append("path")
+        .attr("class","slot-cell").attr("d", c=>slotCellPath(c.s, c.m))
+        .on("mousemove", (ev,c)=>{
+          const v = lastME[j] ? lastME[j][c.m][c.s] : NaN, cellA = Math.PI/(S*na);
+          showTooltip(ev, `${state.basis?"F":"E"}<sub>${j}</sub> · cell (s=${c.s}, m=${c.m})<br>measure of E<sub>${j}</sub> = ${fmt(v,6)}<br>measure / cell area = ${fmt(v/cellA,4)}`);
+        })
+        .on("mouseleave", hideTooltip);
+      const lat = zg.append("g");
+      for(let m=1; m<na; m++) lat.append("circle").attr("class","slot-lattice").attr("cx",SC0).attr("cy",SC0).attr("r",annulusRadius(m)*SR);
+      for(let s=0; s<S; s++){ const t=TWO_PI*s/S; lat.append("line").attr("class","slot-lattice").attr("x1",SC0).attr("y1",SC0).attr("x2",SC0+SR*Math.cos(t)).attr("y2",SC0-SR*Math.sin(t)); }
+      lat.append("circle").attr("class","slot-circle").attr("cx",SC0).attr("cy",SC0).attr("r",SR);
+      ref.path  = zg.append("path").attr("class","animated-line");
+      ref.dot   = zg.append("circle").attr("class","slot-dot");
+      ref.coef  = zg.append("circle").attr("class","slot-coef");
+      ref.badge = svg.append("text").attr("class","slot-badge").attr("x", 97).attr("y", 9).attr("text-anchor","end");
+      ref.zoomTxt = svg.append("text").attr("class","slot-badge").attr("x", 3).attr("y", 9);
+      applyMarkerSizes(ref);
+
+      // Slot zoom: Ctrl/⌘ + wheel or trackpad pinch zooms, drag pans, double-click resets.
+      // Plain wheel is left alone so the page still scrolls over the grid.
+      const zoom = d3.zoom()
+        .scaleExtent([0.25, 50])
+        // Gentler than d3's default (which multiplies Ctrl-wheel deltas by 10)
+        .wheelDelta(ev => -ev.deltaY * (ev.deltaMode === 1 ? 0.05 : ev.deltaMode ? 1 : 0.002))
+        .filter(ev => ev.type === "wheel" ? (ev.ctrlKey || ev.metaKey) : (!ev.button && ev.type !== "dblclick"))
+        .on("start", ()=>hideTooltip())
+        .on("zoom", ev => {
+          zg.attr("transform", ev.transform);
+          ref.k = ev.transform.k;
+          applyMarkerSizes(ref);
+          ref.zoomTxt.text(Math.abs(ref.k - 1) < 1e-3 ? "" : `${ref.k.toFixed(ref.k < 10 ? 1 : 0)}×`);
+          svg.style("cursor", Math.abs(ref.k - 1) < 1e-3 ? null : "grab");
+        });
+      svg.call(zoom).on("dblclick.zoom", null)
+        .on("dblclick", () => svg.transition().duration(300).call(zoom.transform, d3.zoomIdentity));
+    } else {
+      canvas.textContent = "absent";
+      caption.innerHTML = `c<sub>${j}</sub> = —`;
+    }
+    slot.appendChild(canvas);
+    slot.appendChild(caption);
+    grid.appendChild(slot);
+    slotRefs.push(ref);
+  }
+}
+
+// Marker sizes stay constant on screen whatever the slot zoom
+function applyMarkerSizes(ref){
+  ref.dot.attr("r", 2/ref.k);
+  ref.coef.attr("r", 2.4/ref.k).attr("stroke-width", 0.6/ref.k);
+}
+
+// Draw the outline at morph parameter t:  t = 0 → F_j,  t = 1 → E_j = c_j F_j.
+// In between, the polygon is s(t)·F_j with s(t) = ((1−t) + t|c_j|)·e^{i t arg c_j},
+// i.e. it scales and rotates continuously from the basis polygon to the eigenpolygon.
+function drawOutline(ref, F, t){
+  const j = ref.j, cj = F.c[j], r = cabs(cj);
+  const θ = r < ZERO ? 0 : Math.atan2(cj.im, cj.re);
+  const ρ = (1 - t) + t*r;
+  const sc = cx(ρ*Math.cos(t*θ), ρ*Math.sin(t*θ));
+  const P = F.F[j].map(f => cmul(sc, f));
+  const isPoint = j === 0 || ρ < ZERO;
+  if(isPoint){
+    ref.path.attr("d", null).style("display","none");
+    ref.dot.style("display", null).attr("cx", tx(P[0])).attr("cy", ty(P[0]));
+  } else {
+    ref.path.style("display", null).attr("d", "M" + P.map(p=>`${tx(p)},${ty(p)}`).join(" L") + " Z");
+    ref.dot.style("display","none");
+  }
+  // Red point for c_j while the basis polygon is (partly) shown
+  if(t < 1) ref.coef.style("display", null).attr("cx", tx(cj)).attr("cy", ty(cj));
+  else ref.coef.style("display","none");
+  // Multiplicity badge for multiply traced polygons
+  const g = gcd(j, state.d);
+  ref.badge.text(j > 0 && g > 1 && !isPoint ? `×${g}` : "");
+}
+
+// Animate all slots between F_j and E_j when the checkbox changes
+let morphTimer = null;
+function morph(toBasis){
+  if(morphTimer){ morphTimer.stop(); morphTimer = null; }
+  const F = lastF, DUR = 900;
+  const ease = d3.easeCubicInOut;
+  for(const ref of slotRefs) if(ref.present)
+    ref.label.innerHTML = toBasis ? `Basis Polygon F<sub>${ref.j}</sub>` : `Eigenpolygon E<sub>${ref.j}</sub>`;
+  morphTimer = d3.timer(elapsed => {
+    const u = Math.min(1, elapsed/DUR), e = ease(u);
+    const t = toBasis ? 1 - e : e;
+    for(const ref of slotRefs) if(ref.present) drawOutline(ref, F, t);
+    if(u >= 1){ morphTimer.stop(); morphTimer = null; }
+  });
+}
+
+// Update colours, outlines and captions (called on every change, also mid-drag)
+function updateGrid(F){
+  const d = state.d, S = d*state.nspd, cellA = Math.PI/(S*state.na);
+  let M = 0;
+  for(let j=0; j<d; j++) for(const row of lastME[j]) for(const v of row) M = Math.max(M, Math.abs(v)/cellA);
+  if(M < 1e-12) M = 1e-12;
+  updateColorbar(M);
+  const c1 = cabs(F.c[1]);
+
+  for(const ref of slotRefs){
+    if(!ref.present) continue;
+    const j = ref.j, cj = F.c[j];
+    ref.cells.attr("fill", c => colormap(powerMap(lastME[j][c.m][c.s]/cellA/M)));
+
+    ref.label.innerHTML = state.basis ? `Basis Polygon F<sub>${j}</sub>` : `Eigenpolygon E<sub>${j}</sub>`;
+    drawOutline(ref, F, state.basis ? 0 : 1);
+
+    let cap = `c<sub>${j}</sub> = ${polarStr(cj)}`;
+    if(j !== 1) cap += `<div class="frac">|c<sub>${j}</sub>|/|c<sub>1</sub>| = ${fmt(cabs(cj)/c1)}</div>`;
+    ref.caption.innerHTML = cap;
+  }
+}
+
+// =============================================================================
+// Coefficient chart (scree-plot design from shape-rank-svd)
+// =============================================================================
+const STUB_THRESH = 1e-12;
+const SCREE_M = { top:14, right:20, bottom:36, left:54 }, SCREE_H = 150;
+let screeSVG=null, screeGPlot=null, screeGXAxis=null, screeGYAxis=null, screeGGrid=null, screeXLabel=null;
+let screeWidth = 0, lastCoef = null;
+state.logScale = false;
+
+function initScreeSVG(){
+  const cont = document.getElementById("scree-svg-container");
+  const totalW = cont.clientWidth || 600;
+  screeWidth = totalW - SCREE_M.left - SCREE_M.right;
+  const totalH = SCREE_H + SCREE_M.top + SCREE_M.bottom;
+  screeSVG = d3.select(cont).append("svg").attr("width",totalW).attr("height",totalH);
+  screeSVG.append("rect").attr("width",totalW).attr("height",totalH).attr("fill","#fff");
+  screeGPlot = screeSVG.append("g").attr("transform",`translate(${SCREE_M.left},${SCREE_M.top})`);
+  screeGGrid = screeGPlot.append("g");
+  screeGXAxis = screeGPlot.append("g").attr("class","scree-axis").attr("transform",`translate(0,${SCREE_H})`);
+  screeGYAxis = screeGPlot.append("g").attr("class","scree-axis");
+  screeXLabel = screeGPlot.append("text").attr("class","scree-axis-label")
+    .attr("x",screeWidth/2).attr("y",SCREE_H+30).attr("text-anchor","middle").text("j");
+  const yl = screeGPlot.append("text").attr("class","scree-axis-label")
+    .attr("transform","rotate(-90)").attr("x",-SCREE_H/2).attr("y",-44)
+    .attr("text-anchor","middle");
+  yl.append("tspan").text("|c");
+  yl.append("tspan").attr("baseline-shift","sub").attr("font-size","0.75em").text("j");
+  yl.append("tspan").text("|");
+  new ResizeObserver(()=>resizeScree()).observe(cont);
+}
+function resizeScree(){
+  if(!screeSVG) return;
+  const cont = document.getElementById("scree-svg-container");
+  const totalW = cont.clientWidth || 600;
+  screeWidth = totalW - SCREE_M.left - SCREE_M.right;
+  screeSVG.attr("width",totalW);
+  screeSVG.select("rect").attr("width",totalW);
+  screeXLabel.attr("x",screeWidth/2);
+  if(lastCoef) updateScreePlot(lastCoef, false);
+}
+function updateScreePlot(mags, animate){
+  lastCoef = mags;
+  if(!screeSVG || !mags.length) return;
+  const n = mags.length, top = Math.max(...mags) || 1;
+  const xSc = d3.scaleBand().domain(d3.range(n)).range([0,screeWidth]).padding(0.25);
+  let ySc;
+  if(state.logScale){
+    const pos = mags.filter(s=>s > top*STUB_THRESH);
+    const floor = Math.min(Math.min(...pos), top*1e-3)*0.5;
+    ySc = d3.scaleLog().domain([floor, top*1.2]).range([SCREE_H,0]).clamp(true);
+  } else {
+    ySc = d3.scaleLinear().domain([0, top*1.1]).range([SCREE_H,0]);
+  }
+  const yTicks = ySc.ticks(5);
+  const gridSel = screeGGrid.selectAll("line.scree-gridline").data(yTicks);
+  gridSel.enter().append("line").attr("class","scree-gridline")
+    .merge(gridSel).attr("x1",0).attr("x2",screeWidth).attr("y1",d=>ySc(d)).attr("y2",d=>ySc(d));
+  gridSel.exit().remove();
+  screeGXAxis.call(d3.axisBottom(xSc).tickValues(d3.range(n)).tickFormat(d=>d.toString()));
+  screeGYAxis.call(state.logScale ? d3.axisLeft(ySc).ticks(5,".1e") : d3.axisLeft(ySc).ticks(5,".3~g"));
+
+  const data = mags.map((s,j)=>({ j, s, stub: state.logScale && s <= top*STUB_THRESH, color: SLOT_COLORS[j % SLOT_COLORS.length] }));
+  const barY = d => state.logScale ? (d.stub ? SCREE_H-4 : ySc(Math.max(d.s, ySc.domain()[0]))) : ySc(d.s);
+  const barH = d => state.logScale ? (d.stub ? 4 : Math.max(0, SCREE_H - ySc(Math.max(d.s, ySc.domain()[0])))) : Math.max(0, SCREE_H - ySc(d.s));
+
+  const sel = screeGPlot.selectAll("rect.scree-bar").data(data, d=>d.j);
+  const entered = sel.enter().append("rect")
+    .attr("y", animate ? SCREE_H : barY).attr("height", animate ? 0 : barH);
+  const merged = entered.merge(sel)
+    .attr("class", d=>"scree-bar"+(d.stub?" stub":"")).attr("fill", d=>d.color)
+    .attr("x", d=>xSc(d.j)).attr("width", xSc.bandwidth());
+  if(animate) merged.transition().duration(300).ease(d3.easeCubicOut).attr("y",barY).attr("height",barH);
+  else merged.interrupt().attr("y",barY).attr("height",barH);
+  if(animate) sel.exit().transition().duration(300).attr("y",SCREE_H).attr("height",0).remove();
+  else sel.exit().remove();
+
+  const c1 = mags[1];
+  screeGPlot.selectAll("rect.scree-bar")
+    .on("mousemove", (ev,d)=>showTooltip(ev, `j = ${d.j}<br>|c<sub>${d.j}</sub>| = ${fmt(d.s,6)}` +
+        (d.j !== 1 ? `<br>|c<sub>${d.j}</sub>|/|c<sub>1</sub>| = ${fmt(d.s/c1)}` : "")))
+    .on("mouseleave", hideTooltip);
+}
+document.getElementById("scree-toggle-btn").addEventListener("click", ()=>{
+  state.logScale = !state.logScale;
+  document.getElementById("scree-toggle-btn").textContent = state.logScale ? "Switch to linear scale" : "Switch to log scale";
+  if(lastCoef) updateScreePlot(lastCoef, true);
+});
+
+const MODE_NAMES = { signed: "signed measure", unsigned: "unsigned measure", tv: "total-variation measure" };
+state.mode = "signed";
+state.basis = false;
+let lastCross = 0;      // max difference between the two signed-measure routines
+let lastMz = null;     // measure matrix of z, M[m][s]
+let lastME = [];       // measure matrices of E_j
+let gridKey = "";
+let lastF = null;
+function update(){
+  if(morphTimer){ morphTimer.stop(); morphTimer = null; }     // any change ends a morph
+  const F = computeFourier();
+  lastF = F;
+  lastMz = measureMatrix(F.z, state.mode);
+  lastME = F.E.map(Ej => measureMatrix(Ej, state.mode));
+  // Self-test: the general routine (used for all three measures) must agree with the
+  // independent fan-triangle routine on the signed measure, for z and every E_j
+  lastCross = 0;
+  for(const P of [F.z, ...F.E]){
+    const A = signedMeasureMatrix(P), B = measureMatrix(P, "signed");
+    for(let m=0; m<A.length; m++) for(let s=0; s<A[0].length; s++)
+      lastCross = Math.max(lastCross, Math.abs(A[m][s] - B[m][s]));
+  }
+  const key = `${state.d}|${state.nspd}|${state.na}`;
+  if(key !== gridKey){ buildGrid(); gridKey = key; }
+  updateGrid(F);
+  updateScreePlot(F.c.map(cabs), false);
+  renderNumericDetails(F);
+}
+document.getElementById("measure-select").addEventListener("change", e=>{
+  state.mode = e.target.value;
+  update();
+});
+document.getElementById("basis-cb").addEventListener("change", e=>{
+  state.basis = e.target.checked;
+  morph(state.basis);
+});
+function renderAll(){
+  renderLattice();
+  renderPolygon();
+  renderVertices();
+  update();
+}
+function renderDuringDrag(){
+  renderPolygon();
+  renderVertices();
+  update();
+}
+
+// =============================================================================
+// Tooltip
+// =============================================================================
+const tooltip = document.getElementById("heatmap-tooltip");
+function showTooltip(ev,html){ tooltip.innerHTML=html; tooltip.style.display="block"; tooltip.style.left=(ev.clientX+14)+"px"; tooltip.style.top=(ev.clientY+14)+"px"; }
+function hideTooltip(){ tooltip.style.display="none"; }
+
+// =============================================================================
+// Status
+// =============================================================================
+const statusEl = document.getElementById("status");
+let statusTO = null;
+function showStatus(msg,kind){
+  statusEl.textContent = msg || " "; statusEl.className = kind || "";
+  if(statusTO) clearTimeout(statusTO);
+  if(msg) statusTO = setTimeout(()=>{ statusEl.textContent=" "; statusEl.className=""; }, 2500);
+}
+
+// =============================================================================
+// Drag: each vertex moves only along its own ray ζ_k
+// =============================================================================
+function snapRadius(t){
+  const n = Math.round(t*state.g);
+  return Math.max(1, Math.min(state.g, n)) / state.g;
+}
+const dragBehavior = d3.drag()
+  .container(function(){ return leftSVG.node(); })
+  // Track the raw pointer (SVG units), not the datum's complex coordinates
+  .subject(function(event){ return { x: event.x, y: event.y }; })
+  .on("start", function(){ d3.select(this).classed("dragging",true); hideTooltip(); })
+  .on("drag", function(event, v){
+    // Project the pointer onto the ray: t = <p, ζ_k>, clamped to [1/g, 1]
+    const u = zeta(v.k, state.d);
+    const t = ux(event.x)*u.x + uy(event.y)*u.y;
+    state.a[v.k] = Math.max(1/state.g, Math.min(1, t));
+    renderDuringDrag();
+  })
+  .on("end", function(event, v){
+    d3.select(this).classed("dragging",false);
+    state.a[v.k] = snapRadius(state.a[v.k]);
+    showStatus(`a${v.k} = ${fracStr(state.a[v.k])}`, "ok");
+    renderAll();
+  });
+
+// =============================================================================
+// Sliders
+// =============================================================================
+const sliders = ["d","nspd","na","g"];
+function setSliderUI(key){
+  document.getElementById("slider-"+key).value = state[key];
+  document.getElementById("value-"+key).textContent = state[key];
+}
+sliders.forEach(key=>{
+  document.getElementById("slider-"+key).addEventListener("input", e=>{
+    state[key] = +e.target.value;
+    document.getElementById("value-"+key).textContent = state[key];
+    if(key === "d" || key === "g"){
+      state.a = new Array(state.d).fill(1);
+      showStatus("z reset to all ones (a = 1).", "ok");
+    }
+    renderAll();
+  });
+});
+
+document.getElementById("reset-btn").addEventListener("click", ()=>{
+  Object.assign(state, DEFAULTS);
+  state.a = new Array(state.d).fill(1);
+  sliders.forEach(setSliderUI);
+  showStatus("Reset to default.", "ok");
+  renderAll();
+});
+
+// =============================================================================
+// Export: every Numeric-details table as its own worksheet in an .ods file
+// =============================================================================
+function coverageSheet(M){
+  // Same layout as on screen: annuli top-down (innermost last), sectors as columns, sums
+  const na = M.length, S = M[0].length;
+  const rows = [["m \\ s", ...d3.range(S), "Σ"]];
+  const colSums = new Array(S).fill(0); let total = 0;
+  for(let m=na-1; m>=0; m--){
+    const r = [m]; let rs = 0;
+    for(let s=0; s<S; s++){ r.push(M[m][s]); rs += M[m][s]; colSums[s] += M[m][s]; }
+    r.push(rs); total += rs; rows.push(r);
+  }
+  rows.push(["Σ", ...colSums, total]);
+  return rows;
+}
+function exportTables(){
+  if(typeof XLSX === "undefined"){ showStatus("Export failed: the SheetJS library did not load.", ""); return; }
+  const F = lastF, d = state.d, S = d*state.nspd, nCells = S*state.na;
+  const wb = XLSX.utils.book_new();
+  const add = (name, rows) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name);
+  const sumAE = F.areaE.reduce((t,x)=>t+x, 0);
+  const totalZ = lastMz.flat().reduce((t,x)=>t+x, 0);
+  const rk = numericalRank(lastMz, 1e-9);
+
+  add("Parameters", [
+    ["parameter", "value"],
+    ["d", d], ["nspd", state.nspd], ["na", state.na], ["granularity", state.g],
+    ["B", d3.range(0,state.g+1).map(n=>`${n}/${state.g}`).join(", ")],
+    ["B*", d3.range(1,state.g+1).map(n=>`${n}/${state.g}`).join(", ")],
+    ...state.a.map((ak,k)=>[`a_${k}`, ak]),
+    ["sectors S", S], ["cells", nCells], ["cell area", Math.PI/nCells],
+    ["sense of measure", MODE_NAMES[state.mode]],
+    ["total measure of z over all cells", totalZ],
+    ["A(z)", F.areaZ],
+    ["vertex reconstruction error", F.reconV],
+    ["Parseval: sum |c_j|^2", F.parsL], ["Parseval: (1/d) sum a_k^2", F.parsR],
+    ["rank(A)", rk.rank],
+  ]);
+  add("A of z", coverageSheet(lastMz));
+  const c1 = cabs(F.c[1]);
+  add("Coefficients c_j", [
+    ["j", ...d3.range(d)],
+    ["|c_j|", ...F.c.map(cabs)],
+    ["arg c_j (deg)", ...F.c.map(c => cabs(c) < ZERO ? "" : argDeg(c))],
+    ["|c_j|/|c_1|", ...F.c.map((c,j) => j === 1 ? "" : cabs(c)/c1)],
+  ]);
+  add("Signed areas", [
+    d3.range(d).map(j=>`A(E_${j})`),
+    F.areaE,
+    [],
+    ["A(z)", F.areaZ], ["sum_j A(E_j)", sumAE], ["A(z) - sum_j A(E_j)", F.areaZ - sumAE],
+  ]);
+  for(let j=0; j<d; j++){
+    if(isDegenerate(j, F)) continue;
+    add(`A_${j} of E_${j}`, [...coverageSheet(lastME[j]), [], [`rank(A_${j})`, numericalRank(lastME[j], 1e-9).rank]]);
+  }
+  const fname = `eigenpolygon-tables-d${d}-${state.mode}.ods`;
+  XLSX.writeFile(wb, fname, { bookType: "ods" });
+  showStatus(`Exported ${wb.SheetNames.length} tables to ${fname}.`, "ok");
+}
+document.getElementById("export-btn").addEventListener("click", ev=>{
+  ev.preventDefault(); ev.stopPropagation();     // do not toggle the <details>
+  exportTables();
+});
+
+// =============================================================================
+// Boot
+// =============================================================================
+initScreeSVG();
+renderAll();
+</script>
+</body>
+</html>
