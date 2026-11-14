@@ -29,29 +29,12 @@ Each _basis polygon_ $F_j$ is a regular polygon inscribed in the unit circle: co
 
 **Polar lattice and coverage matrices.** The unit disc is divided into $n_s = d \cdot n_{spd}$ sectors ($n_{spd}$ per wedge between adjacent axes) and $n_a$ annuli, with radii $\sqrt{p/n_a}$ for $p = 0, \ldots, n_a$, so that all cells have the same area. The **coverage matrix** of an arbitrary polygon $P$ (e.g., $P = z$ or $P = E_j$) records, for each cell $C$, how much of $P$ falls in it. Because eigenpolygons can be stars that wind around a point more than once, or run clockwise, the applet offers three senses of measure, all based on the winding number $w_P$:
 
-Sense
 
-Cell value
-
-Meaning
-
-Signed
-
-$\int_C w_P$
-
-area counted with multiplicity and orientation
-
-Unsigned
-
-area of $C \cap \lbrace w_P \neq 0 \rbrace$
-
-area the polygon visibly covers
-
-Total-variation
-
-$\int_C \lvert w_P \rvert$
-
-area counted with multiplicity, ignoring orientation
+| Sense | Cell value | Meaning |
+|---|---|---|
+| Signed | $\int_C w_P$ | area counted with multiplicity and orientation |
+| Unsigned | area of $C \cap \lbrace w_P \neq 0 \rbrace$ | area the polygon visibly covers |
+| Total-variation | $\int_C \lvert w_P \rvert$ | area counted with multiplicity, ignoring orientation |
 
 For $z$ itself, which never crosses itself and always runs counter-clockwise, the three senses coincide.
 
